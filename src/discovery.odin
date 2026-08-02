@@ -23,6 +23,7 @@ import "core:slice"
 import "core:strings"
 import "core:sys/posix"
 import "core:thread"
+import "core:time"
 
 DISCOVER_DEPTH :: 3
 
@@ -32,9 +33,20 @@ DISCOVER_DEPTH :: 3
 // + allocation per call) that this gate never uses. present=false means the file is gone.
 @(private = "file")
 stat_size_mtime :: proc(path: cstring) -> (present: bool, size: u64, mtime_ns: i64) {
-	st: posix.stat_t
-	if posix.stat(path, &st) != .OK do return
-	return true, u64(st.st_size), i64(st.st_mtim.tv_sec) * 1_000_000_000 + i64(st.st_mtim.tv_nsec)
+	when ODIN_OS == .Windows {
+		// Windows has no core:sys/posix stat. Fall back to os.stat, which allocates a
+		// File_Info whose fullpath this gate discards — the readlink+alloc the lean posix
+		// path was written to avoid. That cost is fine here: the perf-tuned path targets
+		// Linux/macOS, and no measured Windows large-corpus workload justifies a native
+		// GetFileAttributesEx backend yet. Temp allocator: the CLI is short-lived.
+		fi, err := os.stat(string(path), context.temp_allocator)
+		if err != nil do return
+		return true, u64(fi.size), time.time_to_unix_nano(fi.modification_time)
+	} else {
+		st: posix.stat_t
+		if posix.stat(path, &st) != .OK do return
+		return true, u64(st.st_size), i64(st.st_mtim.tv_sec) * 1_000_000_000 + i64(st.st_mtim.tv_nsec)
+	}
 }
 
 // file_mtime returns a file's modification time (unix ns), or 0 if it is absent. Used as
@@ -50,16 +62,23 @@ file_mtime :: proc(path: cstring) -> i64 {
 // in only the index pages it touches (term dict, a few postings), not the whole blob.
 // ok=false means absent or unmappable; the caller falls back to a plain read.
 mmap_file :: proc(path: cstring) -> ([]u8, bool) {
-	fd := posix.open(path, {})
-	if fd < 0 do return nil, false
-	defer posix.close(fd)
-	st: posix.stat_t
-	if posix.fstat(fd, &st) != .OK do return nil, false
-	size := int(st.st_size)
-	if size <= 0 do return nil, false
-	p := posix.mmap(nil, c.size_t(size), {.READ}, {.PRIVATE}, fd, 0)
-	if p == posix.MAP_FAILED do return nil, false
-	return (cast([^]u8)p)[:size], true
+	when ODIN_OS == .Windows {
+		// No mmap here: return unmappable so the caller falls back to a plain read
+		// (cmd_query.odin). A CreateFileMapping/MapViewOfFile backend waits on a measured
+		// Windows workload — until then the read path is correct and simpler.
+		return nil, false
+	} else {
+		fd := posix.open(path, {})
+		if fd < 0 do return nil, false
+		defer posix.close(fd)
+		st: posix.stat_t
+		if posix.fstat(fd, &st) != .OK do return nil, false
+		size := int(st.st_size)
+		if size <= 0 do return nil, false
+		p := posix.mmap(nil, c.size_t(size), {.READ}, {.PRIVATE}, fd, 0)
+		if p == posix.MAP_FAILED do return nil, false
+		return (cast([^]u8)p)[:size], true
+	}
 }
 
 // Cheap per-file stat data: no source bytes read. Gathered by the I/O shell and
