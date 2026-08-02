@@ -164,7 +164,9 @@ header, a file table, a chunk table, a sorted term dictionary, postings, corpus
 stats, and a deduped string blob. It holds raw statistics only, no precomputed
 scores. The tables are packed little-endian struct arrays, so the search reader
 casts them in place out of an mmap rather than parsing field by field. Index load
-costs almost nothing, and a cold search faults in only the pages it touches.
+costs almost nothing, and a cold search faults in only the pages it touches. (On
+Windows, which lacks the POSIX mmap, doma reads the index whole instead — same
+results, but the whole index is loaded up front rather than demand-paged.)
 
 **Searching.** A corpus query mmaps that one corpus's index and ranks with BM25
 (`k1 = 1.2`, `b = 0.75`). It keeps the top *k* through a bounded min-heap and
