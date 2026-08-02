@@ -1,0 +1,59 @@
+name: release
+
+# Build native binaries on each OS and attach them to a GitHub Release.
+# Odin cannot cross-compile the linker step, so every target builds on its own
+# runner. Triggered by pushing a version tag, e.g. `git tag v0.1.0 && git push --tags`.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            out: doma-linux-amd64
+          - os: macos-14
+            out: doma-macos-arm64
+          - os: windows-latest
+            out: doma-windows-amd64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        uses: laytan/setup-odin@v2
+        with:
+          release: nightly
+
+      - name: Build
+        run: odin build . -out:${{ matrix.out }} -o:speed
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: ${{ matrix.out }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

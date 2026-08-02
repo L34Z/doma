@@ -1,0 +1,15 @@
+# Build output
+/build/
+/bench/
+/doma
+
+# Environment / tooling
+.direnv/
+.claude/
+.superpowers/
+
+# Generated indexes (keep catalog.ini and testdata fixtures)
+*.doma-index
+/.doma/*.idx
+!testdata/
+!testdata/*.doma-index
